@@ -38,14 +38,14 @@ zerotobar<-function(df,num=0){
 	df
 }
 
-#mark significance at the 10%(5%) level, Signif. codes: 5% '*' 10% '`'
+#mark significance at the 10%(5%) level, Significance codes: 5% '**' 10% '*'
 significance<-function(df1,dfp){
 	for (i in 1:30){
 	for (j in 1:30){
 		if(dfp[i,j]<0.05){
-			df1[i,j]	<-paste0(df1[i,j],'*')
+			df1[i,j]	<-paste0(df1[i,j],'**')
 		}else if(dfp[i,j]>=0.05 & dfp[i,j]<0.1){
-			df1[i,j]<-paste0(df1[i,j],'`')
+			df1[i,j]<-paste0(df1[i,j],'*')
 		}		
 	}
 	}
@@ -64,6 +64,12 @@ convertNumtoNum<-function(dfn,num1,num2){
 	dfn
 }
 
+#print to latex
+tolatex<-function(dfn){
+	print(xtable(dfn[,1:10],align=rep('c',length(dfn[,1:10])+1)))
+	print(xtable(dfn[,11:20],align=rep('c',length(dfn[,11:20])+1)))
+	print(xtable(dfn[,21:30],align=rep('c',length(dfn[,21:30])+1)))
+}
 #============================Table 1====================================
 #Summary statistics, industry portfolio excess returns, 1959:12-2016:12
 
@@ -144,10 +150,79 @@ lasso.result<-zerotobar(roundtable(result))
 #Table A2
 lasso.result
 #lasso.lambda
+tolatex(lasso.result)
 
+#=========================================Table A6=====================================
+#OLS post-ENet predictive regression estimation results, 1960:01-2016:12
+
+enet.coefs<-data.frame(col_name1 = 0)	
+enet.coefs<-enet.coefs[,-1]
+for (i in 1:length(Y)){
+	cv.enet<-cv.glmnet(X,Y[,i],standardize=T,alpha=0.5,nfolds=10,nlambda=100,intercept=T)
+	cv.enet.pre<-predict(cv.enet, X, s=cv.enet$lambda,exact=TRUE)
+	cv.enet.sigma<-colSums((cv.enet.pre-Y[,i])^2)/length(Y[,i])
+	cv.enet.aicc<-log(cv.enet.sigma)+2*(cv.enet$nzero+1)/(length(Y[,i])-cv.enet$nzero-2)
+	cv.enet.lambda<-cv.enet$lambda[which(cv.enet.aicc==min(cv.enet.aicc))]		#choose the lambda with minimum AICc
+	enet.fit<-glmnet(X,Y[,i],standardize=T,alpha=0.5,lambda=cv.enet.lambda,intercept=T)
+	coefs<-as.data.frame(as.matrix(coef(enet.fit,exact=T)))
+	enet.coefs<-cbind(enet.coefs,coefs)	
+}
+colnames(enet.coefs)<-names
+enet.coefs<-enet.coefs[-1,]		#ENet coefficients
+
+OLSpostENet.coefs<-data.frame(row.names=names)	#dataframe of coefficients of OLS post-ENet
+OLSpostENet.pvalue<-data.frame(row.names=names)	#dataframe of p-value of OLS post-LASSO according to conventional OLS post-ENet t-statistics
+R.squared<-c()
+CT<-c()
+for (i in 1:30){
+	cols<-which(enet.coefs[,i]!=0)		#index of regressors selected by ENet
+	if (!is.empty(cols)){
+		y<-Y[,i]
+		fmla<-as.formula(paste('y~',paste0(names[cols],collapse='+')))		#re-estimate the coefficients using OLS for the selected predictor variables by ENet
+		OLSpostENet.fit<-lm(fmla,data=train)
+		coefs<-as.data.frame(coefficients(OLSpostENet.fit))
+		p.value<-summary(OLSpostENet.fit)$coefficients		#p-value according to conventional OLS t-statistics
+		coefs1<-c()		#make coefficients of predictor variables not selected by ENet equal to 99
+		for (j in 1:30){
+			if (names[j] %in% row.names(coefs)){
+			coefs1[j]=coefs[names[j],]
+			}else{coefs1[j]=99}
+		}
+		pvalues1<-c()		#make p-value(conventional OLS t-statistics) of predictor variables not selected by ENet equal to 99
+		for (m in 1:30){
+			if (names[m] %in% row.names(p.value)){
+				pvalues1[m]=p.value[names[m],4]
+			}else{pvalues1[m]=99}
+		}
+		OLSpostENet.coefs<-cbind(OLSpostENet.coefs,coefs1)
+		OLSpostENet.pvalue<-cbind(OLSpostENet.pvalue,pvalues1)
+		R2<-summary(OLSpostENet.fit)$r.squared 	#calculate R-squared
+		print(i);print(R2)
+		R.squared<-c(R.squared,R2*100)
+		Si<-mean(Y[,i])/sd(Y[,i])		#calculate CT
+		CTi<-R2*(1+Si^2)/(1-R2)/Si^2
+		CT<-c(CT,CTi)
+	}else{	  #if no predictor variables is selected, make coefficients&p-value equal to 99
+		OLSpostENet.coefs<-cbind(OLSpostENet.coefs,rep(99,30))
+		OLSpostENet.pvalue<-cbind(OLSpostENet.pvalue,rep(99,30))
+		R.squared<-c(R.squared,99)
+		CT<-c(CT,99)
+	}
+}
+
+OLSpostENet.coefs<-rbind(OLSpostENet.coefs,R.squared,CT)
+colnames(OLSpostENet.coefs)<-names
+row.names(OLSpostENet.coefs)<-c(names,'R.squared','CT')
+
+OLSpostENet.coefs<-zerotobar(roundtable(OLSpostENet.coefs),num=99)
+OLSpostENet.coefs<-significance(OLSpostENet.coefs,OLSpostENet.pvalue)
+
+#Table A6
+OLSpostENet.coefs
+tolatex(OLSpostENet.coefs)
 #================================Table 2 and Table A1====================================
-#Table 2: OLS post-LASSO predictive regression estimation results, 1960:01{2016:12
-#Table A1: OLS post-LASSO predictive regression estimation results using White (1980) heteroskedasticity-robust standard errors, 1960:01{2016:12
+#Table 2: OLS post-LASSO predictive regression estimation results, 1960:01-2016:12
+#Table A1: OLS post-LASSO predictive regression estimation results using White (1980) heteroskedasticity-robust standard errors, 1960:01-2016:12
 
 library(stringr)
 library(installr)
@@ -222,12 +297,14 @@ OLSpostLASSO.coefs1<-zerotobar(roundtable(OLSpostLASSO.coefs),num=99)
 
 #Table 2
 OLSpostLASSO.conventional.tstatistics<-significance(OLSpostLASSO.coefs1,OLSpostLASSO.pvalue)  
-OLSpostLASSO.conventional.tstatistics		
+OLSpostLASSO.conventional.tstatistics	
+tolatex(OLSpostLASSO.conventional.tstatistics)
+
 
 #Table A1
 OLSpostLASSO.White.coefs<-significance(OLSpostLASSO.coefs1,OLSpostLASSO.White.pvalue)        
 OLSpostLASSO.White.coefs		
-
+tolatex(OLSpostLASSO.White.coefs)
 
 
 #====================================Table A4=========================================
@@ -261,6 +338,7 @@ colnames(OLSpostLASSO.selectiveInference.pvalue)<-names
 #Table A4
 OLSpostLASSO.selectiveInference<-significance(OLSpostLASSO.coefs1,OLSpostLASSO.selectiveInference.pvalue)
 OLSpostLASSO.selectiveInference
+tolatex(OLSpostLASSO.selectiveInference)
 
 #==============================Table A3====================================
 #OLS predictive regression estimation results, 1960:01-2016:12
@@ -309,5 +387,13 @@ for (i in 1:length(Y)){
 colnames(ols.pvalue)<-names
 
 significance(ols.coefs,ols.pvalue)
+tolatex(significance(ols.coefs,ols.pvalue))
+
+
+
+
+
+
+
 
 
