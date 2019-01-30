@@ -1,6 +1,6 @@
-indus<-read.csv('30ValueWeightedIndustry.csv',header=T)
-tbillrt<-read.csv('tbillrt.csv',header=T)
-tbillrt<-tbillrt[,c(1,5)]
+indus<-read.csv('30ValueWeightedIndustry.csv',header=T)  #30 value-weighted industry portfolios from Kenneth French's Data Library
+tbillrt<-read.csv('tbillrt.csv',header=T)		
+tbillrt<-tbillrt[,c(1,5)]		#one-month Treasury bill return data
 colnames(tbillrt)<-c('Date','rf')
 #head(tbillrt)
 #head(indus)
@@ -12,8 +12,61 @@ df<-df[,1:31]
 df<-subset(df,Date>=195912 & Date<=201612)
 #head(df)
 
+#=================================functions===================================
+#Keep two decimal places
+roundtable<-function(df){
+	for (i in 1:nrow(df)){
+	for (j in 1:length(df)){
+		if (round(df[i,j],2)==0){
+			df[i,j]=round(df[i,j],3)
+		}else{
+			df[i,j]=round(df[i,j],2)
+		}
+	}
+	}
+	df
+}
+
+#convert num to '-', in order to make the tables
+zerotobar<-function(df,num=0){
+	for (i in 1:nrow(df)){
+	for (j in 1:length(df)){
+		if (df[i,j]==num)
+			df[i,j]='-'
+	}
+	}
+	df
+}
+
+#mark significance at the 10%(5%) level, Signif. codes: 5% '*' 10% '`'
+significance<-function(df1,dfp){
+	for (i in 1:30){
+	for (j in 1:30){
+		if(dfp[i,j]<0.05){
+			df1[i,j]	<-paste0(df1[i,j],'*')
+		}else if(dfp[i,j]>=0.05 & dfp[i,j]<0.1){
+			df1[i,j]<-paste0(df1[i,j],'`')
+		}		
+	}
+	}
+	df1
+}
+
+#convert num1 to num2 in table dfn
+convertNumtoNum<-function(dfn,num1,num2){
+	for (i in 1:nrow(dfn)){
+	for (j in 1:length(dfn)){
+		if (dfn[i,j]==num1){
+			dfn[i,j]=num2
+		}
+	}
+	}
+	dfn
+}
+
 #============================Table 1====================================
 #Summary statistics, industry portfolio excess returns, 1959:12-2016:12
+
 monthmean<-apply(df[,2:31],2,mean)
 Ann.mean<-round(monthmean*12,2)
 Ann.volatilily<-round(apply(df[,2:31],2,sd)*sqrt(12),2)
@@ -23,11 +76,19 @@ Ann.Sharperatio<-round(monthmean*12/apply(df[,2:31],2,sd)/sqrt(12),2)
 
 table1<-data.frame(Ann.mean,Ann.volatilily,Minimum,Maximum,Ann.Sharperatio)
 
-train<-subset(df,Date>=195912 & Date<=201611)
-train<-train[,2:31]
+
+
+
+
+
+
+
+train<-subset(df,Date>=195912 & Date<=201611)   
+train<-train[,2:31]      # dataframe of regressors
 row.names(train)<-1:nrow(train)
-Y<-subset(df,Date>=196001 & Date<=201612)
-Y<-Y[,2:31]
+
+Y<-subset(df,Date>=196001 & Date<=201612)		
+Y<-Y[,2:31]		# dataframe of regressand
 row.names(Y)<-1:nrow(Y)
 
 
@@ -39,31 +100,37 @@ row.names(Y)<-1:nrow(Y)
 #==========================Table A2==================================
 #LASSO predictive regression estimation results, 1960:01-2016:12
 
-#glmnet
+#use the glmnet package
 library(Matrix)
 library(foreach)
 library(glmnet)
 
+
 X<-as.matrix(train)
+X<-scale(X,center=T,scale=F)  #before running glmnet x should be centered
+
 result<-data.frame(col_name1 = 0)
 result<-result[,-1]
 lasso.Rsquared<-c()
+lasso.lambda<-c()
 CT<-c()
 for (i in 1:length(Y)){
 y<-as.vector(Y[,i])
-cv.fit<-cv.glmnet(X,y,nlambda=100,nfolds=10,intercept=F)
-cv.fit.pre<-predict(cv.fit, X, s=cv.fit$lambda)
+cv.fit<-cv.glmnet(X,y,standardize=T,nlambda=1000,nfolds=10,intercept=T)
+cv.fit.pre<-predict(cv.fit, X, s=cv.fit$lambda,exact=TRUE)		#calculate the corrected AIC (AICc)
 cv.fit.sigma<-colSums((cv.fit.pre-y)^2)/length(y)
 cv.aicc<-log(cv.fit.sigma)+2*(cv.fit$nzero+1)/(length(y)-cv.fit$nzero-2)
-fit<-glmnet(X,y,lambda=cv.fit$lambda[which(cv.aicc==min(cv.aicc))],intercept=T)
-coefs<-as.data.frame(as.matrix(round(coef(fit,exact=T),2)))
+cv.fit.lambda<-cv.fit$lambda[which(cv.aicc==min(cv.aicc))]		#choose the lambda with minimum AICc  
+lasso.lambda<-c(lasso.lambda,cv.fit.lambda)		#dataframe of 30 lambda for later use
+fit<-glmnet(X,y,standardize=T,lambda=cv.fit.lambda,intercept=T)	#lasso regression
+coefs<-as.data.frame(as.matrix(coef(fit,exact=T)))
 result<-cbind(result,coefs)
-fit.pre<-predict(fit,X)
-R.squared<-1-sum((fit.pre-y)^2)/sum((y-mean(y))^2)
-lasso.Rsquared<-c(lasso.Rsquared,round(R.squared*100,2))
-Si<-mean(Y[,i])/sd(Y[,i])
+fit.pre<-predict(fit,X,exact=T)
+R.squared<-1-sum((fit.pre-y)^2)/sum((y-mean(y))^2) 	#calculate the R-squared
+lasso.Rsquared<-c(lasso.Rsquared,R.squared*100)
+Si<-mean(Y[,i])/sd(Y[,i])		#calculate CT
 CTi<-R.squared*(1+Si^2)/(1-R.squared)/Si^2
-CT<-c(CT,round(CTi,2))
+CT<-c(CT,CTi)
 }
 
 names<-rownames(result)[-1]
@@ -72,73 +139,128 @@ colnames(result)<-names
 result<-rbind(result[-1,],lasso.Rsquared,CT)
 row.names(result)<-c(names,'R-squared','CT')
 
-for (m in 1:length(result)){
-for (n in 1:nrow(result)){
-if (result[n,m]==0) 
-result[n,m]='-'
-}
-}
+lasso.result<-zerotobar(roundtable(result))
 
-result 
+#Table A2
+lasso.result
+#lasso.lambda
 
-#=============================Table 2(Table A1)====================================
+#================================Table 2 and Table A1====================================
+#Table 2: OLS post-LASSO predictive regression estimation results, 1960:01{2016:12
+#Table A1: OLS post-LASSO predictive regression estimation results using White (1980) heteroskedasticity-robust standard errors, 1960:01{2016:12
+
 library(stringr)
 library(installr)
+library(sandwich)
+library(lmtest)
 
-df1<-result[1:30,]
+df1<-lasso.result[1:30,]
 R.squared<-c()
 CT<-c()
-OLSpostLASSO.coefs<-data.frame(row.names=names,stringsAsFactors=F)
+OLSpostLASSO.coefs<-data.frame(row.names=names,stringsAsFactors=F)	#dataframe of coefficients of OLS post-LASSO
+OLSpostLASSO.pvalue<-data.frame(row.names=names)		#dataframe of p-value of OLS post-LASSO according to conventional OLS post-LASSO t-statistics
+OLSpostLASSO.White.pvalue<-data.frame(row.names=names) 	#dataframe of p-value of OLS post-LASSO according to White heteroskedasticity-robust standard errors
+
 for (i in 1:30){
-	cols<-which(df1[,i]!='-')
+	cols<-which(df1[,i]!='-') 	#index of regressors selected by LASSO
 	if (!is.empty(cols)){
-		fmla<-as.formula(paste('Y[,i]~',paste(names[cols],collapse='+')))
+		fmla<-as.formula(paste('Y[,i]~',paste(names[cols],collapse='+'))) #re-estimate the coefficients using OLS for the selected predictor variables by LASSO
 		OLSpostLASSO.fit<-lm(fmla,data=train)
-		coefs<-as.data.frame(coefficients(OLSpostLASSO.fit)[-1])
-		coefs1<-c()
+		coefs<-as.data.frame(coefficients(OLSpostLASSO.fit))
+		p.value<-summary(OLSpostLASSO.fit)$coefficients		#p-value according to conventional OLS t-statistics
+		White.pvalue<-coeftest(OLSpostLASSO.fit,vcov=vcovHC(OLSpostLASSO.fit,type='HC')) #p-value according to White heteroskedasticity-robust standard errors
+
+
+		coefs1<-c() 		#make coefficients of predictor variables not selected by LASSO equal to 99
 		for (j in 1:30){
 			if (names[j] %in% row.names(coefs)) {
 				coefs1[j]=coefs[names[j],]
-			}else{coefs1[j]=99999}
+			}else{coefs1[j]=99}
 		}
+
+		pvalues1<-c()	#make p-value(conventional OLS t-statistics) of predictor variables not selected by LASSO equal to 99
+		for (m in 1:30){
+			if (names[m] %in% row.names(p.value)){
+				pvalues1[m]=p.value[names[m],4]
+			}else{pvalues1[m]=99}
+		}
+
+		Whitepvalues1<-c()  	#make p-value(White heteroskedasticity-robust standard errors) of predictor variables not selected by LASSO equal to 99
+		for (q in 1:30){
+			if (names[q] %in% row.names(White.pvalue)){
+				Whitepvalues1[q]=White.pvalue[names[q],4]
+			}else{Whitepvalues1[q]=99}
+		}
+
 		OLSpostLASSO.coefs<-cbind(OLSpostLASSO.coefs,coefs1)
-		R2<-summary(OLSpostLASSO.fit)$r.squared
+		OLSpostLASSO.pvalue<-cbind(OLSpostLASSO.pvalue,pvalues1)
+		OLSpostLASSO.White.pvalue<-cbind(OLSpostLASSO.White.pvalue,Whitepvalues1)
+		R2<-summary(OLSpostLASSO.fit)$r.squared 	#calculate R-squared
 		R.squared<-c(R.squared,R2*100)
-		Si<-mean(Y[,i])/sd(Y[,i])
+		Si<-mean(Y[,i])/sd(Y[,i])		#calculate CT
 		CTi<-R2*(1+Si^2)/(1-R2)/Si^2
 		CT<-c(CT,CTi)
-	}else{
-		OLSpostLASSO.coefs<-cbind(OLSpostLASSO.coefs,rep(99999,30))
-		R.squared<-c(R.squared,99999)
-		CT<-c(CT,99999)
+	}else{	  #if no predictor variables is selected, make coefficients&p-value equal to 99
+		OLSpostLASSO.coefs<-cbind(OLSpostLASSO.coefs,rep(99,30))
+		OLSpostLASSO.pvalue<-cbind(OLSpostLASSO.pvalue,rep(99,30))
+		OLSpostLASSO.White.pvalue<-cbind(OLSpostLASSO.White.pvalue,rep(99,30))
+		R.squared<-c(R.squared,99)
+		CT<-c(CT,99)
 	}
 }
 
-colnames(OLSpostLASSO.coefs)<-names
-
-
 OLSpostLASSO.coefs<-rbind(OLSpostLASSO.coefs,R.squared,CT)
-
-
-for (i in 1:nrow(OLSpostLASSO.coefs)){
-for (j in 1:length(OLSpostLASSO.coefs)){
-		if (round(OLSpostLASSO.coefs[i,j],2)==0){
-			OLSpostLASSO.coefs[i,j]=round(OLSpostLASSO.coefs[i,j],3)
-		}else{
-			OLSpostLASSO.coefs[i,j]=round(OLSpostLASSO.coefs[i,j],2)
-		}
-}
-}
-
-for (i in 1:nrow(OLSpostLASSO.coefs)){
-for (j in 1:length(OLSpostLASSO.coefs)){
-	if (OLSpostLASSO.coefs[i,j]==99999) OLSpostLASSO.coefs[i,j]='-'
-}
-}
-
 row.names(OLSpostLASSO.coefs)=c(names,'R.squared','CT')
 
-OLSpostLASSO.coefs 
+colnames(OLSpostLASSO.coefs)<-names
+colnames(OLSpostLASSO.pvalue)<-names
+colnames(OLSpostLASSO.White.pvalue)<-names
+
+OLSpostLASSO.coefs1<-zerotobar(roundtable(OLSpostLASSO.coefs),num=99)
+
+#OLSpostLASSO.coefs1 
+
+#Table 2
+OLSpostLASSO.conventional.tstatistics<-significance(OLSpostLASSO.coefs1,OLSpostLASSO.pvalue)  
+OLSpostLASSO.conventional.tstatistics		
+
+#Table A1
+OLSpostLASSO.White.coefs<-significance(OLSpostLASSO.coefs1,OLSpostLASSO.White.pvalue)        
+OLSpostLASSO.White.coefs		
+
+
+
+#====================================Table A4=========================================
+#OLS post-LASSO predictive regression estimation results using Lee et al. (2016) post-selection confidence intervals, 1960:01-2016:12
+
+library(selectiveInference)  #use the selectiveInference package
+
+OLSpostLASSO.betas<-convertNumtoNum(OLSpostLASSO.coefs,99,0)[-(31:32),]  #dataframe of coefficients of OLS post-LASSO
+OLSpostLASSO.selectiveInference.pvalue<-data.frame(row.names=names)
+for (i in 1:30){	
+	selectiveInference.beta<-OLSpostLASSO.betas[,i]
+	coefs.names<-names[which(selectiveInference.beta!=0)]	#list of predictor variables' names selected by LASSO
+	if (sum(selectiveInference.beta)!=0){
+		selectiveInference.out<-fixedLassoInf(X,Y[,i],beta=selectiveInference.beta,lambda=lasso.lambda[i]/nrow(Y),sigma=sigma)
+		pvalues<-data.frame(selectiveInference.out$pv,row.names=coefs.names)		#p-values according to Lee et al. (2016) post-selection confidence intervals
+		pvalues1<-c()
+		for (j in 1:30){		#make p-value(Lee et al. (2016) post-selection confidence) of predictor variables not selected by LASSO equal to 99
+			if (names[j] %in% coefs.names){
+				pvalues1[j]=pvalues[names[j],1]
+			}else{pvalues1[j]=99}
+		}
+		OLSpostLASSO.selectiveInference.pvalue<-cbind(OLSpostLASSO.selectiveInference.pvalue,pvalues1)
+	}else{
+		OLSpostLASSO.selectiveInference.pvalue<-cbind(OLSpostLASSO.selectiveInference.pvalue,rep(99,30))
+	}
+}
+
+
+colnames(OLSpostLASSO.selectiveInference.pvalue)<-names
+
+#Table A4
+OLSpostLASSO.selectiveInference<-significance(OLSpostLASSO.coefs1,OLSpostLASSO.selectiveInference.pvalue)
+OLSpostLASSO.selectiveInference
 
 #==============================Table A3====================================
 #OLS predictive regression estimation results, 1960:01-2016:12
@@ -169,21 +291,23 @@ CT<-c(CT,CTj)
 ols.coefs<-rbind(ols.coefs,rsquared,CT)
 
 #rounding
-for (m in 1:nrow(ols.coefs)){
-for (n in 1:length(ols.coefs)){
-if (round(ols.coefs[m,n],2)==0) {
-ols.coefs[m,n]=round(ols.coefs[m,n],3)
-}else if(round(ols.coefs[m,n],2)!=0){
-ols.coefs[m,n]=round(ols.coefs[m,n],2)
-}
-}
-}
-
+ols.coefs<-roundtable(ols.coefs)
 
 #rename the row name
 row.names(ols.coefs)<-c(colnames(ols.coefs),'R-squared','CT')
 
 #Table A3
 ols.coefs 
+
+#significance
+ols.pvalue<-data.frame(row.names=names)
+for (i in 1:length(Y)){
+	fit<-lm(Y[,i]~.,data=train)
+	fit.pvalue<-as.data.frame(summary(fit)$coefficients)[-1,4]
+	ols.pvalue<-cbind(ols.pvalue,fit.pvalue)
+}
+colnames(ols.pvalue)<-names
+
+significance(ols.coefs,ols.pvalue)
 
 
